@@ -1,0 +1,47 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# ===== 模型产物 =====
+# 训练输出 (体积大且可再生, 用 train_recognizer.py / train_detector.py 重训)
+checkpoints/
+checkpoints_smoke/
+*.pth
+# 例外: 官方预训练权重较小且是运行必需, 保留入库
+!weights/yunet_n.pth
+!weights/yunet_n_320_320.onnx
+# 但训练产生的检测权重不入库 (yunet 官方权重之外的)
+weights/work_dirs/
+
+# ===== 业务运行产物 =====
+*.npz          # 建库缓存 gallery
+*_det.jpg      # detect_faces.py 可视化输出
+*.log
+runs/
+
+# ===== 数据集 (体积大, 自行准备) =====
+data/
+dataset/
+datasets/
+lfw/
+widerface/
+
+# ===== IDE / 系统 =====
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ===== PyTorch / 训练 =====
+*.ckpt
+*.onnx.tmp
+lightning_logs/
