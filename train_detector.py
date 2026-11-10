@@ -28,6 +28,11 @@ from torch.utils.data import DataLoader
 from yunet import build_yunet, YuNetCriterion, YuNetPostprocessor
 from yunet.dataset import WIDERFaceDataset, collate
 
+try:
+    from tqdm import tqdm
+except ImportError:  # 无 tqdm 时退化为无进度条
+    tqdm = None
+
 
 def parse_args():
     p = argparse.ArgumentParser(description="YuNet training (paper reproduction)")
@@ -102,11 +107,16 @@ def _match_dets(det_boxes, det_scores, gt_boxes, ign_boxes,
 
 @torch.no_grad()
 def evaluate(model, val_loader, criterion, device, post,
-             score_thr: float = 0.35, iou_thr: float = 0.5) -> dict:
+             score_thr: float = 0.35, iou_thr: float = 0.5,
+             epoch: int | None = None) -> dict:
     model.eval()
     tot_loss, n_batches = 0.0, 0
     tp = fp = fn = discarded = 0
-    for batch in val_loader:
+    iterator = iter(val_loader)
+    if tqdm is not None:
+        iterator = tqdm(iterator, total=len(val_loader), desc="eval",
+                        unit="batch", leave=False, ncols=100)
+    for batch in iterator:
         images = batch["images"].to(device)
         # eval 路径 collate 出来是 numpy, 统一转张量
         boxes = [torch.as_tensor(b, device=device) for b in batch["boxes"]]
@@ -182,7 +192,11 @@ def main():
         base_lr = args.lr * (0.1 ** decays)
 
         t0, running, seen = time.time(), 0.0, 0
-        for it, batch in enumerate(train_loader):
+        iterator = iter(train_loader)
+        if tqdm is not None:
+            iterator = tqdm(iterator, total=len(train_loader),
+                            desc=f"epoch {epoch}/{args.epochs}", unit="it", ncols=110)
+        for it, batch in enumerate(iterator):
             global_step += 1
             if global_step <= args.warmup_iters:
                 lr = args.warmup_lr + (args.lr - args.warmup_lr) * global_step / args.warmup_iters
@@ -206,11 +220,14 @@ def main():
 
             running += loss.item()
             seen += 1
-            if it % args.log_interval == 0:
-                parts = " ".join(f"{k}={v.item():.4f}" for k, v in losses.items())
+            if tqdm is not None:
+                parts = {k: f"{v.item():.3f}" for k, v in losses.items()}
+                iterator.set_postfix(loss=f"{running / seen:.4f}", lr=f"{lr:.5f}", **parts)
+            elif it % args.log_interval == 0:
+                detail = " ".join(f"{k}={v.item():.4f}" for k, v in losses.items())
                 speed = seen / max(time.time() - t0, 1e-6)
                 print(f"epoch={epoch} step={it + 1}/{len(train_loader)} "
-                      f"loss={running / seen:.4f} lr={lr:.5f} {speed:.2f}it/s | {parts}",
+                      f"loss={running / seen:.4f} lr={lr:.5f} {speed:.2f}it/s | {detail}",
                       flush=True)
 
         ckpt = dict(model=model.state_dict(), optimizer=optimizer.state_dict(),
