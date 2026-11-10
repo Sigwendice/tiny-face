@@ -232,12 +232,25 @@ def _crop_sample(sample: dict, patch: np.ndarray, keep: np.ndarray) -> None:
         kps[:, :, 1] -= patch[1]
         return kps
 
+    def crop_ignored(arr: np.ndarray) -> np.ndarray:
+        """ignored 框独立按中心落在 patch 内过滤 (数量与 boxes 不同, 不能复用 keep)"""
+        if not len(arr):
+            return arr.reshape(-1, 4)
+        arr = arr.astype(np.float32).copy()
+        centers = (arr[:, :2] + arr[:, 2:]) / 2
+        k = ((centers[:, 0] > patch[0]) & (centers[:, 1] > patch[1])
+             & (centers[:, 0] < patch[2]) & (centers[:, 1] < patch[3]))
+        arr = arr[k]
+        arr[:, 2:] = arr[:, 2:].clip(max=patch[2:])
+        arr[:, :2] = arr[:, :2].clip(min=patch[:2])
+        arr -= np.tile(patch[:2], 2)
+        return arr
+
     sample["image"] = cropped
     sample["boxes"] = crop_boxes(sample["boxes"])
     sample["keypoints"] = crop_kps(sample["keypoints"])
     sample["labels"] = sample["labels"][keep]
-    sample["ignored"] = crop_boxes(sample["ignored"]) if len(sample["ignored"]) else \
-        np.zeros((0, 4), dtype=np.float32)
+    sample["ignored"] = crop_ignored(sample["ignored"])
 
 
 def collate(samples: list[dict]) -> dict:
