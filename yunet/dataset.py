@@ -187,13 +187,26 @@ def build_eval_transforms(image_size: int | None = 640):
             else:
                 nw, nh = w, h
                 sample["scale"] = 1.0
-            dh = (int(np.ceil(nh / 32)) * 32) - nh
-            dw = (int(np.ceil(nw / 32)) * 32) - nw
+            if image_size is not None:
+                # letterbox 到固定方形 (批处理要求等尺寸); 右下 padding 无坐标偏移
+                dh = image_size - nh
+                dw = image_size - nw
+            else:
+                dh = (int(np.ceil(nh / 32)) * 32) - nh
+                dw = (int(np.ceil(nw / 32)) * 32) - nw
             padded = cv2.copyMakeBorder(resized, 0, dh, 0, dw,
                                         cv2.BORDER_CONSTANT, value=0)
             sample["image"] = torch.from_numpy(
                 np.ascontiguousarray(padded.transpose(2, 0, 1))).float()
             sample["img_shape"] = (nh, nw)
+            # GT 同步缩放 (右下 padding 无偏移, 直接乘 scale), 与预测同一坐标系
+            for key, idx in (("boxes", None), ("ignored", None)):
+                if len(sample[key]):
+                    sample[key][:, 0::2] *= scale
+                    sample[key][:, 1::2] *= scale
+            if len(sample["keypoints"]):
+                sample["keypoints"][:, :, 0] *= scale
+                sample["keypoints"][:, :, 1] *= scale
             return sample
 
     return _Eval()
@@ -273,7 +286,7 @@ class WIDERFaceDataset(Dataset):
         if train:
             self.transforms = build_train_transforms(image_size)
         else:
-            self.transforms = build_eval_transforms(image_size)
+            self.transforms = (build_eval_transforms(image_size),)
 
     def __len__(self) -> int:
         return len(self.records)

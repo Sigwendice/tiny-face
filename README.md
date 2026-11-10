@@ -77,8 +77,9 @@ tiny-face/
 ├── facenet/                # 识别器包（MobileFaceNet + ArcFace + LFW 数据管道）
 ├── weights/                # YuNet 官方权重（pth + onnx），入库分发
 ├── checkpoints/            # 本仓库训练的 MobileFaceNet（best @ep147）
-├── train_detector.py       # 训练 YuNet（WIDER FACE）
+├── train_detector.py       # 训练 YuNet（WIDER FACE，含每轮 val 评测）
 ├── train_recognizer.py     # 训练 MobileFaceNet + ArcFace（LFW）
+├── merge_labels.py         # 合并 SCRFD 关键点标注与官方 ignore 标记
 ├── detect_faces.py         # 检测推理 demo（可视化 + ONNX 对照）
 ├── check_yunet.py          # YuNet 结构校验（参数量/前向/损失）
 ├── face_service.py         # ★ 业务入口：检测→对齐→特征→验证/检索
@@ -102,8 +103,33 @@ pip install -r requirements.txt   # torch / torchvision / opencv / numpy<2 / pil
 
 | 任务 | 数据集 | 组织形式 |
 |---|---|---|
-| 检测训练 | WIDER FACE | `data/widerface/WIDER_train/images/` + 官方 `labelv2/train/` 标注 |
+| 检测训练 | WIDER FACE | `<data-root>/WIDER_train/images/` + `labelv2/train/labelv2.txt` |
+| 检测验证（训练中评测） | WIDER FACE val | `<data-root>/WIDER_val/images/` + `labelv2/val/labelv2.txt` |
 | 识别训练 | LFW / CASIA-WebFace | `人名文件夹/图片.jpg`（一人一文件夹） |
+
+WIDER FACE 检测数据的完整目录结构（`train_detector.py --data-root` 只需指向根目录）：
+
+```
+<data-root>/
+├── WIDER_train/
+│   └── images/                      # 12880 张（62 个场景文件夹）
+├── WIDER_val/
+│   └── images/                      # 3226 张
+└── labelv2/
+    ├── train/labelv2.txt            # 156994 脸(75993 带 5 点关键点) + 2399 ignore
+    └── val/labelv2.txt              # 39112 脸 + 585 ignore
+```
+
+标注建议用 `merge_labels.py` 生成：SCRFD 官方 labelv2 带 5 点关键点，但把
+无效脸（invalid=1，模糊到不该当训练目标）内嵌成普通行；该脚本用官方 bbx_gt
+的 invalid 标记把它们改写成 ignore 行，消除约 1.5% 标签噪声，且全程只读源文件：
+
+```bash
+python merge_labels.py --official wider_face_train_bbx_gt.txt \
+    --scrfd scrfd_label/train/labelv2.txt \
+    --out <data-root>/labelv2/train/labelv2.txt
+# val 同理, 换 wider_face_val_bbx_gt.txt 与 val 标注
+```
 
 ```
 data_dir/
@@ -147,11 +173,25 @@ python train_recognizer.py --epochs 1 --limit_steps 5 --out_dir checkpoints_smok
 
 ```bash
 python check_yunet.py                                       # 结构校验
-python train_detector.py --data-root data/widerface --epochs 560
+
+# 完整训练（每 epoch 在 WIDER_val 上评测 P/R/F1, F1 提升自动存 checkpoint_best.pth）
+python train_detector.py --data-root F:/Data/widerface --epochs 560
+
+# 冒烟（2 epoch / 64 样本 / 64 尺寸, 含 val 评测链路）
+python train_detector.py --data-root F:/Data/widerface --smoke
+
+# 断点续训
+python train_detector.py --data-root F:/Data/widerface --resume work_dirs/yunet_n/latest.pth
 ```
 
 论文配置：simOTA 样本匹配，损失 = BCE(cls) + BCE(obj) + 5.0·EIoU(bbox) +
 0.1·SmoothL1(kps)，lr 线性 warmup 1500 iters → 0.01，StepLR ×0.1 @400/544。
+
+**验证评测**：每 epoch 结束在 WIDER_val 上输出 val_loss + P/R/F1@IoU0.5
+（贪心匹配，命中 ignore 框的检测不计误检）。关键参数：`--val-every N`（评测频率，
+0 关闭）、`--val-limit N`（抽前 N 张加速）、`--score-thr`（默认 0.35）。
+用官方权重验证过评测正确性：thr 0.1/0.2/0.35 → P=0.46/0.66/0.82、R=0.36/0.34/0.31。
+
 跳过训练直接使用 `weights/yunet_n.pth`（官方权重，已验证 strict=True 加载）。
 
 ### 训练量怎么定
